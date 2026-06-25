@@ -15,14 +15,19 @@ std::vector<std::string> tokenize(std::string &input)
 {
   std::vector<std::string> args;
   std::string curr;
-  bool quote=false;
+  bool singlequote=false;
+  bool doublequote=false;
   for(char c:input)
   {
-    if(c=='\'')
+    if(c=='\''&&!doublequote)
     {
-      quote=!quote;
+      singlequote=!singlequote;
     }
-    else if(c==' '&&!quote)
+    else if(c=='\"'&&!singlequote)
+    {
+      doublequote=!doublequote;
+    }
+    else if(c==' '&&!singlequote&&!doublequote)
     {
       if(!curr.empty())
       {
@@ -64,27 +69,14 @@ void cd(std::string path)
 }
 void echo(std::string input)
 {
-  bool quote=false;
-  bool lastspace=false;
-  for(char c:input)
+  auto args=tokenize(input);
+  for(int i=0;i<args.size();i++)
   {
-    if(c=='\'')
+    if(i)
     {
-      quote=!quote;
+      std::cout<<' ';
     }
-    else if(c==' '&&!quote)
-    {
-      if(!lastspace)
-      {
-        std::cout<<' ';
-        lastspace=true;
-      }
-    }
-    else
-    {
-      std::cout<<c;
-      lastspace=false;
-    }
+    std::cout<<args[i];
   }
   std::cout<<'\n';
 }
