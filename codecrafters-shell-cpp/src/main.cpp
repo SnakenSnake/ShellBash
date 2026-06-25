@@ -11,6 +11,27 @@
 #else // If not Windows then os is Linux
     #include <unistd.h>
 #endif
+void cd(std::string path)
+{
+  if(path=="~")
+  {
+    #ifdef _WIN32
+    const char *home=getenv("USERPROFILE");
+    #else
+    const char *home=getenv("HOME");
+    #endif
+    if(home)
+    {
+      path=home;
+    }
+  }
+  try{
+    std::filesystem::current_path(path);
+  }
+  catch(std::filesystem::filesystem_error&){
+    std::cout<<"cd: "<<path<<": No such file or directory\n";
+  }
+}
 void pwd()
 {
   // Works for both Linux and Windows systems
@@ -110,6 +131,10 @@ int main() {
   else if(user_input=="pwd")
   {
     pwd();
+  }
+  else if(user_input.substr(0,2)=="cd")
+  {
+    cd(user_input.substr(3));
   }
   else if(user_input.substr(0,5)=="echo ")
   {
