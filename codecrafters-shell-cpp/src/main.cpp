@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <sys/wait.h>
 #include <filesystem>
+#include <fcntl.h>
 #ifdef _WIN32 // Identifies if os is Windows
     #include <io.h>
 #else // If not Windows then os is Linux
@@ -23,6 +24,7 @@ std::vector<std::string> tokenize(std::string &input)
     if(!singlequote&&c=='\\'&&i+1<input.size())
     {
       curr=curr+input[++i];
+      continue;
     }
     else if(c=='\''&&!doublequote)
     {
@@ -72,12 +74,12 @@ void cd(std::string path)
     std::cout<<"cd: "<<path<<": No such file or directory\n";
   }
 }
-void echo(std::string input)
+void echo(std::vector<std::string> &args)
 {
-  auto args=tokenize(input);
-  for(int i=0;i<args.size();i++)
+
+  for(int i=1;i<args.size();i++)
   {
-    if(i)
+    if(i>1)
     {
       std::cout<<' ';
     }
@@ -123,10 +125,21 @@ std::string get_command_path(const std::string &user_input)
 int execute_file(std::string user_input)
 {
   std::vector<std::string> args= tokenize(user_input);
-  std::string token;
+  std::string outfile;
+  bool redirect=false;
   if(args.empty())
   {
     return 0;
+  }
+  for(int i=0;i<args.size();i++)
+  {
+    if(args[i]==">"||args[i]=="1>")
+    {
+      redirect=true;
+      outfile=args[i+1];
+      args.resize(i);
+      break;
+    }
   }
   std::string path=get_command_path(args[0]);
   if(path.empty())
@@ -140,6 +153,17 @@ int execute_file(std::string user_input)
     argv.push_back(arg.data());
   }
   argv.push_back(nullptr);
+  int fd=-1;
+  if(redirect)
+  {
+    fd=open(outfile.c_str(),O_WRONLY|O_CREAT|O_TRUNC,0644);
+    if(fd==-1)
+  {
+    perror("open");
+    return 1;
+  }
+  }
+  
   pid_t pid=fork();
   if(pid==-1)
   {
@@ -148,13 +172,42 @@ int execute_file(std::string user_input)
   }
   if(pid==0)
   {
+     if (redirect)
+    {
+        dup2(fd, STDOUT_FILENO);
+        close(fd);
+    }
      execv(path.c_str(), argv.data());
         perror("execv");
         _exit(1);
   }
+  if(redirect)
+  {
+    close(fd);
+  }
    int status;
     waitpid(pid, &status, 0);
     return WEXITSTATUS(status);
+}
+void redirect_stdout_begin(int &saved_stdout, int &fd, const std::string &outfile)
+{
+    saved_stdout = dup(STDOUT_FILENO);
+
+    fd = open(outfile.c_str(),
+              O_WRONLY | O_CREAT | O_TRUNC,
+              0644);
+
+    dup2(fd, STDOUT_FILENO);
+}
+
+void redirect_stdout_end(int saved_stdout, int fd)
+{
+    fflush(stdout);
+
+    dup2(saved_stdout, STDOUT_FILENO);
+
+    close(saved_stdout);
+    close(fd);
 }
 int main() {
   // Flush after every std::cout / std:cerr
@@ -172,25 +225,68 @@ int main() {
   std::cout << "$ ";
   std::string user_input;
   std::getline(std::cin,user_input);
-  if(user_input=="exit")
+  std::vector<std::string> args = tokenize(user_input);
+  bool redirect = false;
+  std::string outfile;
+  for(int i=0;i<args.size();i++)
+  {
+    if(args[i]==">"||args[i]=="1>")
+    {
+        redirect=true;
+        outfile=args[i+1];
+        args.resize(i);
+        break;
+    } 
+  }
+  if(args.empty())
+  {
+    continue;
+  }
+  if(args[0]=="exit")
   {
     break;
   }
-  else if(user_input=="pwd")
+  else if(args[0]=="pwd")
   {
+    int saved_stdout=-1;
+    int fd=-1;
+    if(redirect)
+    redirect_stdout_begin(saved_stdout, fd, outfile);
     pwd();
+    if(redirect)
+    redirect_stdout_end(saved_stdout, fd);
   }
-  else if(user_input.substr(0,2)=="cd")
+  else if(args[0]=="cd")
   {
-    cd(user_input.substr(3));
+    if(args.size()>1)
+    cd(args[1]);
   }
-  else if(user_input.substr(0,5)=="echo ")
+  else if(args[0]=="echo")
   {
-    echo(user_input.substr(5));
+    int saved_stdout=-1;
+    int fd=-1;
+
+    if(redirect)
+    {
+      redirect_stdout_begin(saved_stdout, fd, outfile);
+    }
+    echo(args);
+
+    if (redirect)
+      redirect_stdout_end(saved_stdout, fd);
   }
-  else if(user_input.substr(0,5)=="type ")
+  else if(args[0]=="type")
   {
-    std::string command=user_input.substr(5);
+    int saved_stdout = -1;
+    int fd = -1;
+
+    if (redirect)
+    redirect_stdout_begin(saved_stdout, fd, outfile);
+    if(args.size()<2)
+    {
+      continue;
+    }
+    std::string command=args[1];
     bool type_found=std::find(builtin.begin(),builtin.end(),command)!=builtin.end();
     if(type_found)
       std::cout<<command<<" is a shell builtin"<<"\n";
@@ -207,6 +303,9 @@ int main() {
     {
       std::cout<<command<<": not found\n";
     }
+
+  if (redirect)
+    redirect_stdout_end(saved_stdout, fd);
   }
   else
   {
