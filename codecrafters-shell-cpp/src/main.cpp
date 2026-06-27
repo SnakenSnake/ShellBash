@@ -32,11 +32,40 @@ struct Job{
   std::string status;
 };
 std::vector<Job> jobs;
+int getjobno()
+{
+  if(jobs.empty())
+  {
+    return 1;
+  }
+  int maxi=0;
+ 
+    for(auto &job:jobs)
+    {
+      maxi=std::max(maxi,job.job_no);
+    }
+  return maxi+1;
+}
 void jobs_func(std::vector<std::string> &args)
 {
+  std::vector<Job> remJobs;
   for(int i=0;i<jobs.size();i++)
   {
-    std::cout<<"["<<jobs[i].job_no<<"] ";
+    int status;
+    pid_t result=waitpid(jobs[i].PID,&status,WNOHANG);
+    if(result==0)
+    {
+      jobs[i].status="Running";
+    }
+    else if(result==jobs[i].PID)
+    {
+      jobs[i].status="Done";
+    }
+    else
+    {
+      perror("waitpid");
+    }
+    std::cout<<"["<<jobs[i].job_no<<"]";
     if(i==jobs.size()-1)
     {
       std::cout<<"+";
@@ -45,10 +74,36 @@ void jobs_func(std::vector<std::string> &args)
     {
       std::cout<<"-";
     }
-    std::cout<<" ";
+    else{
+      std::cout<<" ";
+    }
+    std::cout<<"  ";
     std::cout<<std::left<<std::setw(24)<<jobs[i].status;
     std::cout<<jobs[i].cmd<<'\n';
+    if(jobs[i].status=="Running")
+    {
+      remJobs.push_back(jobs[i]);
+    }
   }
+  jobs=remJobs;
+}
+void reapJobs()
+{
+  std::vector<Job> rem;
+  for(auto &job:jobs)
+  {
+  int status;
+  pid_t pid=waitpid(job.PID,&status,WNOHANG);
+  if(pid==0)
+  {
+    rem.push_back(job);
+  }
+  else if(pid==job.PID)
+  {
+     std::cout<<"["<<job.job_no<<"]+  "<<std::left<<std::setw(24)<<"Done"<<job.cmd<<'\n';
+  }
+  }
+  jobs=rem;
 }
 void complete(std::vector<std::string> &args)
 {
@@ -412,14 +467,14 @@ int execute_file(std::vector<std::string> args,std::vector<Redirection> &reds)
       }
       cmd+=args[i];
     }
-    cmd+=" &";
+    int job_no=getjobno();
     jobs.push_back({
-      nextJob,
+      job_no,
       pid,
       cmd,
       "Running"
     });
-    std::cout<<"["<<nextJob<<"] "<<pid<<'\n';
+    std::cout<<"["<<job_no<<"] "<<pid<<'\n';
     nextJob++;
     return 0;
   }
@@ -438,6 +493,7 @@ int main() {
   // TODO: Uncomment the code below to pass the first stage
   do
   {
+    reapJobs();
   std::cout << "$ ";
   std::string user_input;
   bool lastTab=false;
