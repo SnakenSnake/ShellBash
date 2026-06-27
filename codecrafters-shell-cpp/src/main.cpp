@@ -10,19 +10,46 @@
 #include <termios.h>
 #include <set>
 #include <map>
+#include <iomanip>
 #ifdef _WIN32 // Identifies if os is Windows
     #include <io.h>
 #else // If not Windows then os is Linux
     #include <unistd.h>
 #endif
+  int nextJob=1; 
   std::map<std::string,std::string> completeC;
-  std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete"};
+  std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete","jobs"};
   namespace fs=std::filesystem;
 struct Redirection{
   int fd;
   std::string filename;
   bool append;
 };
+struct Job{
+  int job_no;
+  pid_t PID;
+  std::string cmd;
+  std::string status;
+};
+std::vector<Job> jobs;
+void jobs_func(std::vector<std::string> &args)
+{
+  for(int i=0;i<jobs.size();i++)
+  {
+    std::cout<<"["<<jobs[i].job_no<<"] ";
+    if(i==jobs.size()-1)
+    {
+      std::cout<<"+";
+    }
+    else if(jobs.size()>=2&&i==jobs.size()-2)
+    {
+      std::cout<<"-";
+    }
+    std::cout<<" ";
+    std::cout<<std::left<<std::setw(24)<<jobs[i].status;
+    std::cout<<jobs[i].cmd<<'\n';
+  }
+}
 void complete(std::vector<std::string> &args)
 {
   if(args.size()==4&&args[1]=="-C")
@@ -247,6 +274,15 @@ std::vector<std::string> tokenize(std::string &input)
         curr.clear();
       }
     }
+    else if(c=='&'&&!singlequote&&!doublequote)
+    {
+      if(!curr.empty())
+      {
+        args.push_back(curr);
+        curr.clear();
+      }
+      args.push_back("&");
+    }
     else
     {
       curr+=c;
@@ -334,6 +370,12 @@ int execute_file(std::vector<std::string> args,std::vector<Redirection> &reds)
   {
     return 0;
   }
+  bool background=false;
+  if(args.back()=="&")
+  {
+    background=true;
+    args.pop_back();
+  }
   std::string path=get_command_path(args[0]);
   if(path.empty())
   {
@@ -359,9 +401,34 @@ int execute_file(std::vector<std::string> args,std::vector<Redirection> &reds)
         perror("execv");
         _exit(1);
   }
-   int status;
-    waitpid(pid, &status, 0);
+  if(background)
+  {
+    std::string cmd;
+    for(int i=0;i<args.size();i++)
+    {
+      if(i>0)
+      {
+        cmd+=" ";
+      }
+      cmd+=args[i];
+    }
+    cmd+=" &";
+    jobs.push_back({
+      nextJob,
+      pid,
+      cmd,
+      "Running"
+    });
+    std::cout<<"["<<nextJob<<"] "<<pid<<'\n';
+    nextJob++;
+    return 0;
+  }
+  else
+  {
+    int status;
+    waitpid(pid,&status,0);
     return WEXITSTATUS(status);
+  }
 }
 int main() {
   // Flush after every std::cout / std:cerr
@@ -542,6 +609,10 @@ int main() {
   if(args[0]=="exit")
   {
     break;
+  }
+  else if(args[0]=="jobs")
+  {
+    jobs_func(args);
   }
   else if(args[0]=="complete")
   {
