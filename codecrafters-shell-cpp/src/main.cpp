@@ -9,18 +9,43 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <set>
+#include <map>
 #ifdef _WIN32 // Identifies if os is Windows
     #include <io.h>
 #else // If not Windows then os is Linux
     #include <unistd.h>
 #endif
-  std::vector<std::string> builtin={"echo","exit","pwd","cd","type"};
+  std::map<std::string,std::string> completeC;
+  std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete"};
   namespace fs=std::filesystem;
 struct Redirection{
   int fd;
   std::string filename;
   bool append;
 };
+void complete(std::vector<std::string> &args)
+{
+  if(args.size()==4&&args[1]=="-C")
+  {
+    completeC[args[3]]=args[2];
+  }
+  if(args.size()==3&&args[1]=="-p")
+  {
+    auto it=completeC.find(args[2]);
+    if(it==completeC.end())
+    {
+      std::cerr<<"complete: "<<args[2]<<": no completion specification"<<'\n';
+    }
+    else
+    {
+      std::cout<<"complete -C '"<<it->second<<"' "<<args[2]<<'\n';
+    }
+  }
+  if(args.size()==3&&args[1]=="-r")
+  {
+    completeC.erase(args[2]);
+  }
+}
 std::vector<int> apply_redirections(std::vector<Redirection> & reds)
 {
   std::vector<int> saved;
@@ -54,6 +79,33 @@ void restore_redirections(const std::vector<Redirection>& reds,const std::vector
         dup2(saved[i],reds[i].fd);
         close(saved[i]);
     }
+}
+std::vector<std::string> runCompleter(const std::string &script,std::string &command,
+  std::string &currentword,std::string &previousWord,std::string &user_input)
+{
+  std::string cmd ="'" + script + "' '" +command + "' '" +currentword + "' '" +previousWord + "'";
+    std::vector<std::string> matches;
+    setenv("COMP_LINE",user_input.c_str(),1);
+    std::string point=std::to_string(user_input.size());
+    setenv("COMP_POINT",point.c_str(),1);
+    FILE *pipe=popen(cmd.c_str(),"r");
+    if (!pipe)
+    {
+      return matches;
+    }
+    char buffer[1024];
+    while (fgets(buffer,sizeof(buffer),pipe))
+    {
+        std::string line(buffer);
+        while (!line.empty()&&(line.back()=='\n'||line.back()=='\r'))
+        {
+            line.pop_back();
+        }
+        if (!line.empty())
+            matches.push_back(line);
+    }
+    pclose(pipe);
+    return matches;
 }
 char getch()
 {
@@ -345,14 +397,36 @@ int main() {
     if(c=='\t')
     {
       size_t pos=user_input.find_last_of(" ");
+      bool endswithSpace=!user_input.empty()&&user_input.back()==' ';
       std::string word;
-      if(pos==std::string::npos)
+      if(endswithSpace)
+      {
+        word="";
+      }
+      else if(pos==std::string::npos)
       {
         word=user_input;
       }
       else
       {
         word=user_input.substr(pos+1);
+      }
+      std::istringstream ss(user_input);
+      std::string command;
+      ss>>command;
+      std::vector<std::string> tokens=tokenize(user_input);
+      std::string prevword="";
+      if(endswithSpace)
+      {
+        if(!tokens.empty())
+        {
+          prevword=tokens.back();
+        }
+      }
+      else
+      if(tokens.size()>=2)
+      {
+        prevword=tokens[tokens.size()-2];
       }
       std::vector<std::string> matches;
       if(pos==std::string::npos)
@@ -361,6 +435,16 @@ int main() {
       }
       else
       {
+        auto it=completeC.find(command);
+        if(it!=completeC.end())
+        {
+          matches=runCompleter(it->second,command,word,prevword,user_input);
+        }
+        else if(pos==std::string::npos)
+        {
+          matches=autocomplete(word);
+        }
+        else
         matches=getFileMatches(word);
       }
       std::string prefix=LCP(matches);
@@ -458,6 +542,10 @@ int main() {
   if(args[0]=="exit")
   {
     break;
+  }
+  else if(args[0]=="complete")
+  {
+    complete(args);
   }
   else if(args[0]=="pwd")
   {
