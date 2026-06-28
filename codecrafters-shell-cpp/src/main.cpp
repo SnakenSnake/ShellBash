@@ -485,6 +485,180 @@ int execute_file(std::vector<std::string> args,std::vector<Redirection> &reds)
     return WEXITSTATUS(status);
   }
 }
+void trim(std::string &s)
+{
+    int start=0;
+    while(start<s.size()&&s[start]==' ')
+        start++;
+    if(start==s.size()) 
+    {
+        s="";
+        return;
+    }
+
+    int end=s.size()-1;
+    while (end>=start&&s[end]==' ')
+        end--;
+
+    s=s.substr(start,end-start+1);
+}
+bool execute_builtin(std::vector<std::string> &args)
+{
+  if(args[0]=="echo")
+  {
+    echo(args);
+    return 1;
+  }
+  if(args[0]=="pwd")
+  {
+    pwd();
+    return 1;
+  }
+  if(args[0]=="type")
+  {
+    int saved_stdout = -1;
+    int fd = -1;
+    if(args.size()<2)
+    {
+      return true;
+    }
+    std::string command=args[1];
+    bool type_found=std::find(builtin.begin(),builtin.end(),command)!=builtin.end();
+    if(type_found)
+      std::cout<<command<<" is a shell builtin"<<"\n";
+    else
+    {
+      std::string full_path=get_command_path(command);
+      if(!full_path.empty())
+      {
+        std::cout<<command<<" is "<<full_path<<"\n";
+        type_found=true;
+      }
+    }
+    if(!type_found)
+    {
+      std::cout<<command<<": not found\n";
+    }
+  return true;
+  }
+  if(args[0]=="cd")
+  {
+    if(args.size()>1)
+    {
+      cd(args[1]);
+    }
+    return true;
+  }
+  if(args[0]=="jobs")
+  {
+    jobs_func(args);
+    return true;
+  }
+  if(args[0]=="complete")
+  {
+    complete(args);
+    return true;
+  }
+  return false;
+}
+void execute_pipe(std::string &input)
+{
+  std::vector<std::string> commands;
+  std::stringstream ss(input);
+  std::string cmd;
+  while(getline(ss,cmd,'|'))
+  {
+    trim(cmd);
+    commands.push_back(cmd);
+  }
+  if(commands.empty())
+  {
+    return;
+  }
+  int prev_read=-1;
+  std::vector<pid_t> pids;
+  for(int i=0;i<commands.size();i++)
+  {
+    std::vector<std::string> args=tokenize(commands[i]);
+    if(args.empty())
+    {
+      continue;
+    }
+    std::vector<char *> argv;
+    for(auto &s:args)
+    {
+      argv.push_back(s.data());
+    }
+    argv.push_back(nullptr);
+    int fd[2];
+    if(i!=commands.size()-1)
+    {
+      if(pipe(fd)==-1)
+      {
+        perror("pipe");
+        return;
+      }
+    }
+    pid_t pid=fork();
+    if(pid==-1)
+    {
+      perror("fork");
+      return;
+    }
+    if(pid==0)
+    {
+      if(prev_read!=-1)
+      {
+        dup2(prev_read,STDIN_FILENO);
+      }
+      if(i!=commands.size()-1)
+      {
+        dup2(fd[1],STDOUT_FILENO);
+      }
+      if(prev_read!=-1)
+      {
+        close(prev_read);
+      }
+      if(i!=commands.size()-1)
+      {
+        close(fd[0]);
+        close(fd[1]);
+      }
+      if(execute_builtin(args))
+      {
+        _exit(0);
+      }
+      std::string path=get_command_path(args[0]);
+      if(path.empty())
+      {
+        std::cerr<<args[0]<<": command not found\n";
+        _exit(1);
+      }
+      execv(path.c_str(),argv.data());
+      perror("execv");
+      _exit(1);
+    }
+    pids.push_back(pid);
+    if(prev_read!=-1)
+    {
+      close(prev_read);
+    }
+    if(i!=commands.size()-1)
+    {
+      close(fd[1]);
+      prev_read=fd[0];
+    }
+
+  }
+  if(prev_read!=-1)
+  {
+    close(prev_read);
+  }
+  for(pid_t p:pids)
+  {
+    waitpid(p,nullptr,0);
+  }
+}
 int main() {
   // Flush after every std::cout / std:cerr
   std::cout << std::unitbuf;
@@ -626,7 +800,12 @@ int main() {
     std::cout<<c;
     std::cout.flush();
     }
-  
+  size_t pipePos=user_input.find('|');
+  if(pipePos!=std::string::npos)
+  {
+    execute_pipe(user_input);
+    continue;
+  }
   std::vector<std::string> args = tokenize(user_input);
   std::vector<Redirection> redirections;
   std::vector<std::string> realArgs;
