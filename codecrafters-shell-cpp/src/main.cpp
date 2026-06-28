@@ -11,6 +11,7 @@
 #include <set>
 #include <map>
 #include <iomanip>
+#include <fstream>    
 #ifdef _WIN32 // Identifies if os is Windows
     #include <io.h>
 #else // If not Windows then os is Linux
@@ -18,9 +19,11 @@
 #endif
   int nextJob=1; 
   int historyIndex=0;
+  size_t lastsaved=0;
   std::vector<std::string> history;
   std::map<std::string,std::string> completeC;
-  std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete","jobs","history"};
+  std::string history_file;
+  std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete","jobs","history","declare"};
   namespace fs=std::filesystem;
 struct Redirection{
   int fd;
@@ -34,6 +37,77 @@ struct Job{
   std::string status;
 };
 std::vector<Job> jobs;
+void history_boot()
+{
+  const char *histfile=getenv("HISTFILE");
+    if(histfile!=nullptr)
+    {
+      history_file=histfile;
+      std::ifstream fin(histfile);
+      std::string line;
+      while(std::getline(fin,line))
+        {
+            if (!line.empty())
+              history.push_back(line);
+        }
+        lastsaved = history.size();
+    }
+}
+void history_read(std::string &filename)
+{
+  std::ifstream fin(filename);
+  if(!fin.is_open())
+  {
+    std::cerr<<"history: "<<filename<<": No such file or directory\n";
+    return;
+  }
+  std::string line;
+  while(std::getline(fin,line))
+  {
+    if(!line.empty())
+    {
+      history.push_back(line);
+    }
+  }
+  fin.close();
+}
+void history_write(std::string &filename)
+{
+  if(filename.empty())
+  {
+    return;
+  }
+  std::ofstream fout(filename);
+  if(!fout.is_open())
+  {
+    std::cerr<<"history: "<<filename<<": Cannot open file\n";
+    return;
+  }
+  for(auto s:history)
+  {
+    fout<<s<<'\n';
+  }
+  fout.close();
+}
+void history_append(std::string filename)
+{
+  if(filename.empty())
+  {
+    return;
+  }
+  std::ofstream fout(filename,std::ios::app);
+  if(!fout.is_open())
+  {
+     std::cerr<<"history: "<<filename<<": Cannot open file\n";
+    return;
+  }
+  for(int i=lastsaved;i<history.size();i++)
+  {
+    fout<<history[i]<<'\n';
+  }
+  lastsaved=history.size();
+  fout.close();
+}
 int getjobno()
 {
   if(jobs.empty())
@@ -92,17 +166,23 @@ void jobs_func(std::vector<std::string> &args)
 void reapJobs()
 {
   std::vector<Job> rem;
-  for(auto &job:jobs)
+  for(int i=0;i<jobs.size();i++)
   {
   int status;
-  pid_t pid=waitpid(job.PID,&status,WNOHANG);
+  pid_t pid=waitpid(jobs[i].PID,&status,WNOHANG);
   if(pid==0)
   {
-    rem.push_back(job);
+    rem.push_back(jobs[i]);
   }
-  else if(pid==job.PID)
+  else if(pid==jobs[i].PID)
   {
-     std::cout<<"["<<job.job_no<<"]+  "<<std::left<<std::setw(24)<<"Done"<<job.cmd<<'\n';
+    char marker = ' ';
+    if (i==jobs.size()-1)
+        marker='+';
+    else if(i==jobs.size()-2)
+        marker='-';
+            std::cout<<"["<<jobs[i].job_no<<"]"<<marker<<"  "<<std::left<<std::setw(20)<<"Done"
+                      <<jobs[i].cmd<<'\n';
   }
   }
   jobs=rem;
@@ -531,12 +611,16 @@ bool execute_builtin(std::vector<std::string> &args)
 {
   if(args[0]=="exit")
   {
+    if(!history.empty())
+    {
+      history_append(history_file);
+    }
     exit(0);
   }
   if(args[0]=="history")
   {
     int start=0;
-    if(args.size()==2)
+    if(args.size()==2&&args[1][0]!='-')
     {
       int n=std::stoi(args[1]);
       if(n<(int)history.size())
@@ -544,7 +628,22 @@ bool execute_builtin(std::vector<std::string> &args)
         start=history.size()-n;
       }
     }
-    for(int i=start;i<history.size();i++)
+    else if(args.size()==3&&args[1]=="-r")
+    {
+      history_read(args[2]);
+      return true;
+    }
+    else if(args.size()==3&&args[1]=="-w")
+    {
+      history_write(args[2]);
+      return true;
+    }
+    else if(args.size()==3&&args[1]=="-a")
+    {
+      history_append(args[2]);
+      return true;
+    }
+     for(int i=start;i<history.size();i++)
     {
       std::cout<<i+1<<" "<<history[i]<<'\n';
     }
@@ -709,8 +808,7 @@ int main() {
   // Flush after every std::cout / std:cerr
   std::cout << std::unitbuf;
   std::cerr << std::unitbuf;
-
-  // TODO: Uncomment the code below to pass the first stage
+  history_boot();
   do
   {
     reapJobs();
