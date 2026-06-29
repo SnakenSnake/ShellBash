@@ -22,6 +22,7 @@
   size_t lastsaved=0;
   std::vector<std::string> history;
   std::map<std::string,std::string> completeC;
+  std::map<std::string,std::string> declarevar;
   std::string history_file;
   std::vector<std::string> builtin={"echo","exit","pwd","cd","type","complete","jobs","history","declare"};
   namespace fs=std::filesystem;
@@ -37,6 +38,51 @@ struct Job{
   std::string status;
 };
 std::vector<Job> jobs;
+bool isvalididentifier(std::string s)
+{
+  if(s.empty())
+  {
+    return false;
+  }
+  if(s[0]!='_'&&!(std::isalpha(s[0])))
+  return false;
+  for (char c:s)
+  {
+    if(!std::isalnum(c)&&c!='_')
+    {
+      return false;
+    }
+  }
+  return true;
+}
+void declare(std::vector<std::string> &args)
+{
+  if(args.size()==3&&args[1]=="-p")
+  {
+    if(declarevar.find(args[2])==declarevar.end())
+    {
+    std::cerr<<"declare: "<<args[2]<<": not found\n";
+    return;
+    }
+    else
+    {
+      std::cout<<"declare -- "<<args[2]<<"="<<"\""<<declarevar[args[2]]<<"\""<<'\n';
+    }
+  }
+  if(args.size()==2)
+  {
+    size_t pos=args[1].find('=');
+    if(pos!=std::string::npos)
+    {
+      std::string name=args[1].substr(0,pos);
+      std::string val=args[1].substr(pos+1);
+      if(isvalididentifier(name))
+      declarevar[name]=val;
+      else
+      std::cout<<"declare: `"<<args[1]<<"\': not a valid identifier"<<'\n';
+    }
+  }
+}
 void history_boot()
 {
   const char *histfile=getenv("HISTFILE");
@@ -648,6 +694,10 @@ bool execute_builtin(std::vector<std::string> &args)
       std::cout<<i+1<<" "<<history[i]<<'\n';
     }
     return true;
+  }
+  if(args[0]=="declare")
+  {
+    declare(args);
   }
   if(args[0]=="echo")
   {
